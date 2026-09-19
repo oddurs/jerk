@@ -47,7 +47,7 @@ jobs:
           Compress-Archive -Path dist/jerk.exe -DestinationPath "jerk-${{ matrix.target }}.zip"
           Remove-Item dist/jerk.exe
           Move-Item "jerk-${{ matrix.target }}.zip" dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: jerk-${{ matrix.target }}
           path: dist/*
