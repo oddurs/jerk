@@ -259,14 +259,27 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         rows[0],
     );
 
-    let cards = Layout::horizontal([
-        Constraint::Ratio(1, 4),
-        Constraint::Ratio(1, 4),
-        Constraint::Ratio(1, 4),
-        Constraint::Ratio(1, 4),
-    ])
-    .spacing(1)
-    .split(rows[1]);
+    let show_velocity = rows[1].width >= 100;
+    let cards = if show_velocity {
+        Layout::horizontal([
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+        ])
+        .spacing(1)
+        .split(rows[1])
+    } else {
+        Layout::horizontal([
+            Constraint::Ratio(1, 4),
+            Constraint::Ratio(1, 4),
+            Constraint::Ratio(1, 4),
+            Constraint::Ratio(1, 4),
+        ])
+        .spacing(1)
+        .split(rows[1])
+    };
     metric(
         frame,
         cards[0],
@@ -288,9 +301,26 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         theme.secondary,
         theme,
     );
+    let active_card = if show_velocity {
+        metric(
+            frame,
+            cards[2],
+            "NEW · 30D",
+            &app.portfolio
+                .as_ref()
+                .map(|stats| stats.created_30d.to_string())
+                .unwrap_or_else(|| "—".into()),
+            "repos created",
+            theme.good,
+            theme,
+        );
+        3
+    } else {
+        2
+    };
     metric(
         frame,
-        cards[2],
+        cards[active_card],
         "ACTIVE · 30D",
         &app.portfolio
             .as_ref()
@@ -302,7 +332,7 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     );
     metric(
         frame,
-        cards[3],
+        cards[active_card + 1],
         "WIP",
         &wip.to_string(),
         "active Cairn",
@@ -310,7 +340,17 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         theme,
     );
 
-    let columns = if rows[2].width >= 100 {
+    let columns = if rows[2].width >= 110 {
+        Layout::horizontal([
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+            Constraint::Ratio(1, 5),
+        ])
+        .spacing(1)
+        .split(rows[2])
+    } else if rows[2].width >= 100 {
         Layout::horizontal([
             Constraint::Ratio(1, 4),
             Constraint::Ratio(1, 4),
@@ -398,20 +438,31 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
             .count();
         stats.total.saturating_sub(local_for_owner)
     });
-    let github_lines = [
-        ("PUBLIC", github.map_or(0, |stats| stats.public)),
-        ("PRIVATE", github.map_or(0, |stats| stats.private)),
-        ("CLOUD", cloud_only),
-        ("STALE", github.map_or(0, |stats| stats.stale_1y_unarchived)),
-        (
-            "NO DESC",
-            github.map_or(0, |stats| stats.public_missing_description),
-        ),
-        (
-            "NO LIC",
-            github.map_or(0, |stats| stats.public_missing_license),
-        ),
-    ]
+    let github_lines = if columns.len() >= 5 {
+        vec![
+            ("PUBLIC", github.map_or(0, |stats| stats.public)),
+            ("PRIVATE", github.map_or(0, |stats| stats.private)),
+            ("CLOUD", cloud_only),
+            ("ACTIVE", github.map_or(0, |stats| stats.active_30d)),
+            ("STALE", github.map_or(0, |stats| stats.stale_1y_unarchived)),
+            ("ARCHIVE", github.map_or(0, |stats| stats.archived)),
+        ]
+    } else {
+        vec![
+            ("PUBLIC", github.map_or(0, |stats| stats.public)),
+            ("PRIVATE", github.map_or(0, |stats| stats.private)),
+            ("CLOUD", cloud_only),
+            ("STALE", github.map_or(0, |stats| stats.stale_1y_unarchived)),
+            (
+                "NO DESC",
+                github.map_or(0, |stats| stats.public_missing_description),
+            ),
+            (
+                "NO LIC",
+                github.map_or(0, |stats| stats.public_missing_license),
+            ),
+        ]
+    }
     .into_iter()
     .map(|(name, count)| compact_field(name, &count.to_string(), theme))
     .collect::<Vec<_>>();
@@ -420,27 +471,105 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         columns[2],
     );
 
-    let mut attention = projects.clone();
-    attention.sort_by_key(|project| project.score.total);
-    let attention = attention
-        .into_iter()
-        .take(6)
-        .map(|project| {
-            Line::from(vec![
-                Span::styled(
-                    format!(" {:>3} ", project.score.total),
-                    Style::default()
-                        .fg(theme.score(project.score.total))
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(project.name.clone(), Style::default().fg(theme.text)),
-            ])
-        })
-        .collect::<Vec<_>>();
-    if columns.len() > 3 {
+    let stale = match github {
+        Some(stats) if stats.stale_projects.is_empty() => vec![Line::from(Span::styled(
+            " Nothing waiting for archive.",
+            Style::default().fg(theme.good),
+        ))],
+        Some(stats) => stats
+            .stale_projects
+            .iter()
+            .take(6)
+            .map(|project| {
+                let age = if project.age_days >= 730 {
+                    format!("{}y", project.age_days / 365)
+                } else {
+                    format!("{}m", project.age_days / 30)
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {:>3} ", age),
+                        Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        if project.private { "◆ " } else { "○ " },
+                        Style::default().fg(theme.faint),
+                    ),
+                    Span::styled(project.name.clone(), Style::default().fg(theme.text)),
+                ])
+            })
+            .collect(),
+        None if app.portfolio_loading => vec![Line::from(Span::styled(
+            " Loading GitHub inventory…",
+            Style::default().fg(theme.muted),
+        ))],
+        None => vec![Line::from(Span::styled(
+            " GitHub inventory unavailable.",
+            Style::default().fg(theme.muted),
+        ))],
+    };
+    if columns.len() == 4 {
         frame.render_widget(
-            Paragraph::new(attention).block(panel(" NEEDS ATTENTION ", theme, true)),
+            Paragraph::new(stale).block(panel(" STALE · REVIEW ", theme, true)),
             columns[3],
+        );
+    } else if columns.len() >= 5 {
+        let hygiene = [
+            (
+                "DESC",
+                github.map_or("—".into(), |stats| {
+                    format!(
+                        "{}/{}",
+                        stats
+                            .public
+                            .saturating_sub(stats.public_missing_description),
+                        stats.public
+                    )
+                }),
+            ),
+            (
+                "LICENSE",
+                github.map_or("—".into(), |stats| {
+                    format!(
+                        "{}/{}",
+                        stats.public.saturating_sub(stats.public_missing_license),
+                        stats.public
+                    )
+                }),
+            ),
+            (
+                "TOPICS",
+                github.map_or("—".into(), |stats| {
+                    format!(
+                        "{}/{}",
+                        stats.public.saturating_sub(stats.public_missing_topics),
+                        stats.public
+                    )
+                }),
+            ),
+            (
+                "HOME",
+                github.map_or("—".into(), |stats| {
+                    format!("{}/{}", stats.with_homepage, stats.total)
+                }),
+            ),
+            (
+                "RELEASE",
+                github.map_or("—".into(), |stats| {
+                    format!("{}/{}", stats.with_releases, stats.total)
+                }),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, value)| compact_field(name, &value, theme))
+        .collect::<Vec<_>>();
+        frame.render_widget(
+            Paragraph::new(hygiene).block(panel(" PUBLIC HYGIENE ", theme, true)),
+            columns[3],
+        );
+        frame.render_widget(
+            Paragraph::new(stale).block(panel(" STALE · REVIEW ", theme, true)),
+            columns[4],
         );
     }
 }

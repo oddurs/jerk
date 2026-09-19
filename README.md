@@ -13,7 +13,7 @@ It scans local Git repositories immediately, then enriches the selected project 
 - GitHub effectiveness: open, merged, and closed pull requests; issues; stars; forks; 14-day unique views and clones; release downloads; latest release; and workflow/default-branch checks.
 - Website delivery: source detection, deployment URL discovery, HTTP health, status code, and latency.
 - Cairn overview: roadmap completion, open/active/blocked/done work, milestones, current work, and what is next.
-- Portfolio overview: local versus cloud inventory, lifecycle mix, maintenance surface, standards coverage, recent GitHub activity, archive debt, and total work in progress.
+- Portfolio overview: local versus cloud inventory, lifecycle mix, repository creation velocity, standards coverage, public-repository hygiene, an actionable stale-repository review queue, and total work in progress.
 - A transparent 100-point effectiveness score built from those signals.
 - Lifecycle-aware project profiles from an optional committed `.jerk.toml`.
 

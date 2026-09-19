@@ -23,12 +23,21 @@ pub struct GithubPortfolio {
     pub private: usize,
     pub archived: usize,
     pub active_30d: usize,
+    pub created_30d: usize,
     pub stale_1y_unarchived: usize,
     pub public_missing_description: usize,
     pub public_missing_license: usize,
     pub public_missing_topics: usize,
     pub with_releases: usize,
     pub with_homepage: usize,
+    pub stale_projects: Vec<StaleProject>,
+}
+
+#[derive(Clone, Debug)]
+pub struct StaleProject {
+    pub name: String,
+    pub age_days: u64,
+    pub private: bool,
 }
 
 pub fn portfolio(owner: &str) -> Result<GithubPortfolio, String> {
@@ -41,7 +50,7 @@ pub fn portfolio(owner: &str) -> Result<GithubPortfolio, String> {
             "500",
             "--source",
             "--json",
-            "description,isPrivate,isArchived,pushedAt,homepageUrl,licenseInfo,repositoryTopics,latestRelease",
+            "name,description,isPrivate,isArchived,createdAt,pushedAt,homepageUrl,licenseInfo,repositoryTopics,latestRelease",
         ])
         .env("GH_PROMPT_DISABLED", "1")
         .env("GH_HTTP_TIMEOUT", "12")
@@ -52,7 +61,10 @@ pub fn portfolio(owner: &str) -> Result<GithubPortfolio, String> {
     }
     let repos: Vec<Value> = serde_json::from_slice(&output.stdout)
         .map_err(|_| "GitHub returned invalid portfolio data".to_string())?;
-    let now = Utc::now();
+    Ok(summarize_portfolio(owner, &repos, Utc::now()))
+}
+
+fn summarize_portfolio(owner: &str, repos: &[Value], now: DateTime<Utc>) -> GithubPortfolio {
     let mut stats = GithubPortfolio {
         owner: owner.into(),
         total: repos.len(),
@@ -98,10 +110,35 @@ pub fn portfolio(owner: &str) -> Result<GithubPortfolio, String> {
                 now.signed_duration_since(pushed.with_timezone(&Utc))
                     .num_days()
             });
-        stats.active_30d += usize::from(age.is_some_and(|days| days <= 30));
-        stats.stale_1y_unarchived += usize::from(!archived && age.is_some_and(|days| days > 365));
+        let created_age = repo
+            .get("createdAt")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|created| {
+                now.signed_duration_since(created.with_timezone(&Utc))
+                    .num_days()
+            });
+        stats.active_30d += usize::from(age.is_some_and(|days| (0..=30).contains(&days)));
+        stats.created_30d += usize::from(created_age.is_some_and(|days| (0..=30).contains(&days)));
+        if let Some(age_days) = age.filter(|days| !archived && *days > 365) {
+            stats.stale_1y_unarchived += 1;
+            stats.stale_projects.push(StaleProject {
+                name: repo
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unnamed")
+                    .to_string(),
+                age_days: u64::try_from(age_days).unwrap_or_default(),
+                private,
+            });
+        }
     }
-    Ok(stats)
+    stats.stale_projects.sort_by(|a, b| {
+        b.age_days
+            .cmp(&a.age_days)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    stats
 }
 
 pub fn enrich(project: &Project) -> RemoteUpdate {
@@ -282,4 +319,77 @@ fn health(url: &str) -> Option<(u16, u64)> {
     let status = parts.next()?.parse::<u16>().ok()?;
     let seconds = parts.next()?.parse::<f64>().ok()?;
     Some((status, (seconds * 1000.0) as u64))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Utc};
+    use serde_json::json;
+
+    use super::summarize_portfolio;
+
+    #[test]
+    fn portfolio_summary_tracks_velocity_hygiene_and_stale_work() {
+        let now = DateTime::parse_from_rfc3339("2026-09-18T12:00:00Z")
+            .map(|value| value.with_timezone(&Utc))
+            .unwrap_or_else(|error| panic!("valid test timestamp: {error}"));
+        let repos = vec![
+            json!({
+                "name": "fresh-public",
+                "description": null,
+                "isPrivate": false,
+                "isArchived": false,
+                "createdAt": "2026-09-01T12:00:00Z",
+                "pushedAt": "2026-09-17T12:00:00Z",
+                "homepageUrl": "https://fresh.example",
+                "licenseInfo": null,
+                "repositoryTopics": [],
+                "latestRelease": { "tagName": "v1.0.0" }
+            }),
+            json!({
+                "name": "old-private",
+                "description": null,
+                "isPrivate": true,
+                "isArchived": false,
+                "createdAt": "2022-01-01T00:00:00Z",
+                "pushedAt": "2023-01-01T00:00:00Z",
+                "homepageUrl": "",
+                "licenseInfo": null,
+                "repositoryTopics": [],
+                "latestRelease": null
+            }),
+            json!({
+                "name": "archived-public",
+                "description": "Kept for history",
+                "isPrivate": false,
+                "isArchived": true,
+                "createdAt": "2020-01-01T00:00:00Z",
+                "pushedAt": "2020-02-01T00:00:00Z",
+                "homepageUrl": "",
+                "licenseInfo": { "key": "mit" },
+                "repositoryTopics": [{ "name": "archive" }],
+                "latestRelease": null
+            }),
+        ];
+
+        let summary = summarize_portfolio("oddurs", &repos, now);
+
+        assert_eq!(summary.owner, "oddurs");
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.public, 2);
+        assert_eq!(summary.private, 1);
+        assert_eq!(summary.archived, 1);
+        assert_eq!(summary.active_30d, 1);
+        assert_eq!(summary.created_30d, 1);
+        assert_eq!(summary.stale_1y_unarchived, 1);
+        assert_eq!(summary.public_missing_description, 1);
+        assert_eq!(summary.public_missing_license, 1);
+        assert_eq!(summary.public_missing_topics, 1);
+        assert_eq!(summary.with_releases, 1);
+        assert_eq!(summary.with_homepage, 1);
+        assert_eq!(summary.stale_projects.len(), 1);
+        assert_eq!(summary.stale_projects[0].name, "old-private");
+        assert!(summary.stale_projects[0].private);
+        assert!(summary.stale_projects[0].age_days > 365);
+    }
 }
