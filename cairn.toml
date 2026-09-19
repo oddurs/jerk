@@ -1,0 +1,77 @@
+format = 3
+
+[project]
+name = "jerk"
+description = "A terminal dashboard for project health, momentum, and completion."
+dir = "cairn/items"
+id_width = 4
+default_type = "feature"
+default_status = "backlog"
+url = "https://github.com/oddurs/jerk/blob/main"
+
+[[type]]
+name = "feature"
+icon = "+"
+color = "cyan"
+
+[[type]]
+name = "bug"
+icon = "!"
+color = "red"
+
+[[type]]
+name = "chore"
+icon = "~"
+color = "gray"
+
+[[status]]
+name = "backlog"
+category = "open"
+color = "gray"
+
+[[status]]
+name = "planned"
+category = "open"
+color = "blue"
+
+[[status]]
+name = "doing"
+category = "active"
+color = "yellow"
+
+[[status]]
+name = "blocked"
+category = "active"
+color = "red"
+
+[[status]]
+name = "done"
+category = "done"
+color = "green"
+
+[[status]]
+name = "dropped"
+category = "dropped"
+color = "gray"
+
+[[field]]
+name = "priority"
+kind = "enum"
+values = ["p0", "p1", "p2", "p3"]
+default = "p2"
+column = true
+
+[[field]]
+name = "area"
+kind = "enum"
+values = ["scan", "git", "github", "cairn", "delivery", "ui", "ai"]
+column = true
+
+[render]
+target = "ROADMAP.md"
+group_by = "status"
+include = "category!=dropped"
+checkbox = true
+show_ids = true
+progress = true
+

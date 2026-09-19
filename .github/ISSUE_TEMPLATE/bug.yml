@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible problem in jerk
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Include the expected behavior and the behavior you observed.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: jerk version
+      placeholder: "jerk 0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: Operating system
+      options: [macOS, Linux, Windows, Other]
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Terminal
+      placeholder: "Ghostty, Windows Terminal, iTerm2, Kitty…"
+  - type: textarea
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional context
+      description: Screenshots and sanitized `--json` output can help. Never include tokens.

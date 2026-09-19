@@ -1,0 +1,29 @@
+schema = 1
+
+[project]
+kind = "tui"
+lifecycle = "active"
+tier = "flagship"
+intent = "Make the state, momentum, reach, and next useful action of every project visible from one terminal."
+outcomes = [
+  "A portfolio can be triaged in under a minute.",
+  "Missing evidence is never confused with failure.",
+  "Every score can be explained by its underlying observations.",
+]
+
+[expect]
+documentation = true
+tests = true
+ci = true
+packaging = true
+releases = true
+site = false
+deployment = false
+planning = true
+collaboration = true
+
+[[component]]
+name = "jerk"
+kind = "repository"
+target = "https://github.com/oddurs/jerk"
+
