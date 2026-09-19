@@ -55,7 +55,11 @@ impl Theme {
     }
 
     pub fn selected(self) -> Style {
-        Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        // Foreground-only selection keeps the terminal palette authoritative.
+        // Reverse video creates a bright slab on dark or tinted backgrounds.
+        Style::default()
+            .fg(self.accent)
+            .add_modifier(Modifier::BOLD)
     }
 
     pub fn score(self, score: u16) -> Color {
@@ -64,5 +68,20 @@ impl Theme {
             50..=74 => self.warn,
             _ => self.bad,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::style::Modifier;
+
+    use super::Theme;
+
+    #[test]
+    fn selection_never_paints_over_the_terminal_palette() {
+        let style = Theme::terminal().selected();
+
+        assert!(style.bg.is_none());
+        assert!(!style.add_modifier.contains(Modifier::REVERSED));
     }
 }

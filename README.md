@@ -59,7 +59,7 @@ Inside the TUI, use `j`/`k` or the arrow keys to select projects, `g`/`G` to jum
 
 ## Terminal-native colour
 
-The default theme never paints a background and never embeds RGB colours. It uses `Color::Reset` plus the terminal's ANSI roles, so Ghostty, SSH sessions, light themes, and live palette changes remain authoritative. Selection uses reverse video for the same reason. Set `NO_COLOR=1` for a monochrome interface.
+The default theme never paints a background and never embeds RGB colours. It uses `Color::Reset` plus the terminal's ANSI roles, so Ghostty, SSH sessions, light themes, and live palette changes remain authoritative. Selection and progress indicators use foreground-only emphasis, avoiding reverse-video blocks that fight dark or tinted backgrounds. Set `NO_COLOR=1` for a monochrome interface.
 
 ## How the score works
 

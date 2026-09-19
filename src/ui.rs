@@ -3,7 +3,8 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, BorderType, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Sparkline, Wrap,
+    Block, BorderType, Borders, Clear, LineGauge, List, ListItem, ListState, Paragraph, Sparkline,
+    Wrap,
 };
 
 use crate::app::{App, Tab};
@@ -30,7 +31,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, theme: Theme) {
 
     if app.visible_count() == 0 {
         draw_empty(frame, app, theme, shell[2]);
-    } else if app.tab == Tab::Portfolio || shell[2].width < 96 {
+    } else if app.tab == Tab::Portfolio || shell[2].width < 96 || app.visible_count() == 1 {
         draw_detail(frame, app, theme, shell[2]);
     } else {
         let columns = Layout::horizontal([Constraint::Length(32), Constraint::Min(60)])
@@ -117,7 +118,7 @@ fn draw_tabs(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     for (index, tab) in Tab::ALL.into_iter().enumerate() {
         let label = format!(" {}:{} ", index + 1, tab.label());
         let style = if tab == app.tab {
-            theme.selected()
+            theme.selected().add_modifier(Modifier::UNDERLINED)
         } else {
             Style::default().fg(theme.muted)
         };
@@ -178,13 +179,19 @@ fn draw_projects(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
             theme,
             false,
         ))
-        .highlight_style(theme.selected())
-        .highlight_symbol("▌");
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_symbol("›");
     let mut state = ListState::default().with_selected(Some(app.selected));
     frame.render_stateful_widget(list, area, &mut state);
 }
 
 fn draw_detail(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
+    // Avoid stretching a handful of signals into enormous bordered boxes on
+    // tall terminals. Unpainted space preserves the user's background.
+    let area = Rect {
+        height: area.height.min(28),
+        ..area
+    };
     if app.tab == Tab::Portfolio {
         draw_portfolio(frame, app, theme, area);
         return;
@@ -226,26 +233,37 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         .sum::<usize>();
 
     let compact = area.height < 23;
-    let rows = Layout::vertical(if compact {
-        [
+    let rows = if compact {
+        Layout::vertical([
             Constraint::Length(4),
             Constraint::Length(5),
             Constraint::Min(8),
-        ]
+        ])
+        .spacing(1)
+        .split(area)
     } else {
-        [
+        Layout::vertical([
+            Constraint::Length(3),
             Constraint::Length(5),
-            Constraint::Length(7),
-            Constraint::Min(8),
-        ]
-    })
-    .spacing(1)
-    .split(area);
+            Constraint::Length(8),
+            Constraint::Min(0),
+        ])
+        .spacing(1)
+        .split(area)
+    };
     frame.render_widget(
-        Gauge::default()
+        LineGauge::default()
             .block(panel(" PORTFOLIO EFFECTIVENESS ", theme, true))
             .ratio(average as f64 / 100.0)
-            .gauge_style(Style::default().fg(theme.score(average as u16)))
+            .filled_symbol("━")
+            .unfilled_symbol("─")
+            .filled_style(
+                Style::default()
+                    .fg(theme.score(average as u16))
+                    .add_modifier(Modifier::BOLD),
+            )
+            .unfilled_style(Style::default().fg(theme.faint))
+            .style(Style::default().fg(theme.muted))
             .label(match &app.portfolio {
                 Some(github) => format!(
                     "{average} local average · {total} local · {} GitHub",
@@ -576,23 +594,26 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
 
 fn draw_overview(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: Rect) {
     let compact = area.height < 25;
-    let rows = Layout::vertical(if compact {
-        [
+    let rows = if compact {
+        Layout::vertical([
             Constraint::Length(4),
-            Constraint::Length(4),
+            Constraint::Length(3),
             Constraint::Length(5),
             Constraint::Min(3),
-        ]
+        ])
+        .spacing(1)
+        .split(area)
     } else {
-        [
+        Layout::vertical([
             Constraint::Length(4),
-            Constraint::Length(5),
-            Constraint::Length(7),
-            Constraint::Min(6),
-        ]
-    })
-    .spacing(1)
-    .split(area);
+            Constraint::Length(3),
+            Constraint::Length(6),
+            Constraint::Length(9),
+            Constraint::Min(0),
+        ])
+        .spacing(1)
+        .split(area)
+    };
 
     let description = project
         .description
@@ -629,13 +650,21 @@ fn draw_overview(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: R
         rows[0],
     );
 
-    let gauge = Gauge::default()
+    let gauge = LineGauge::default()
         .block(panel(
             format!(" EFFECTIVENESS · {} ", project.grade().to_uppercase()),
             theme,
             true,
         ))
-        .gauge_style(Style::default().fg(theme.score(project.score.total)))
+        .filled_symbol("━")
+        .unfilled_symbol("─")
+        .filled_style(
+            Style::default()
+                .fg(theme.score(project.score.total))
+                .add_modifier(Modifier::BOLD),
+        )
+        .unfilled_style(Style::default().fg(theme.faint))
+        .style(Style::default().fg(theme.muted))
         .ratio(f64::from(project.score.total) / 100.0)
         .label(format!(
             "{} / 100 · {}% evidence",
@@ -1099,26 +1128,37 @@ fn draw_cairn(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: Rect
         return;
     };
     let compact = area.height < 23;
-    let rows = Layout::vertical(if compact {
-        [
+    let rows = if compact {
+        Layout::vertical([
             Constraint::Length(4),
             Constraint::Length(5),
             Constraint::Min(6),
-        ]
+        ])
+        .spacing(1)
+        .split(area)
     } else {
-        [
+        Layout::vertical([
+            Constraint::Length(3),
             Constraint::Length(5),
-            Constraint::Length(7),
-            Constraint::Min(6),
-        ]
-    })
-    .spacing(1)
-    .split(area);
+            Constraint::Length(8),
+            Constraint::Min(0),
+        ])
+        .spacing(1)
+        .split(area)
+    };
     frame.render_widget(
-        Gauge::default()
+        LineGauge::default()
             .block(panel(" ROADMAP COMPLETION ", theme, true))
             .ratio(f64::from(cairn.completion) / 100.0)
-            .gauge_style(Style::default().fg(theme.planning))
+            .filled_symbol("━")
+            .unfilled_symbol("─")
+            .filled_style(
+                Style::default()
+                    .fg(theme.planning)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .unfilled_style(Style::default().fg(theme.faint))
+            .style(Style::default().fg(theme.muted))
             .label(format!(
                 "{}% · {} of {} done",
                 cairn.completion, cairn.done, cairn.total
@@ -1324,6 +1364,10 @@ fn human_age(days: u64) -> String {
 }
 
 fn draw_empty(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
+    let area = Rect {
+        height: area.height.min(8),
+        ..area
+    };
     if app.scanning {
         let lines = vec![
             Line::from(Span::styled(
