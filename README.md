@@ -1,5 +1,7 @@
 # jerk
 
+[![CI](https://github.com/oddurs/jerk/actions/workflows/ci.yml/badge.svg)](https://github.com/oddurs/jerk/actions/workflows/ci.yml)
+
 `jerk` is a terminal dashboard for the question every projects directory eventually asks: **which of these things is actually alive, complete, and effective?**
 
 It scans local Git repositories immediately, then enriches the selected project and portfolio with GitHub and deployment data in the background. It understands the conventions already present in these repositories, including [Cairn](https://github.com/oddurs/cairn) roadmaps.
