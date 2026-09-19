@@ -11,6 +11,94 @@ use crate::app::{App, Tab};
 use crate::model::{Project, SignalKind};
 use crate::theme::Theme;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseAction {
+    SelectTab(Tab),
+    SelectProject(usize),
+    Analyze,
+    Payload,
+    Refresh,
+    Sort,
+    Open,
+    Help,
+    Quit,
+    CloseOverlay,
+}
+
+pub fn mouse_action(app: &App, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
+    if app.show_help || app.show_ai_payload {
+        return Some(MouseAction::CloseOverlay);
+    }
+    let shell = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(2),
+        Constraint::Min(12),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    if row >= shell[1].y && row < shell[1].y + shell[1].height {
+        return tab_at(shell[1], column).map(MouseAction::SelectTab);
+    }
+    if row == shell[3].y {
+        return footer_action_at(app.tab, area.width, column);
+    }
+    let has_sidebar = app.tab != Tab::Portfolio && shell[2].width >= 96 && app.visible_count() > 1;
+    if has_sidebar && column < shell[2].x + 32 {
+        let inner_top = shell[2].y.saturating_add(1);
+        let inner_bottom = shell[2].y + shell[2].height.saturating_sub(1);
+        if row >= inner_top && row < inner_bottom {
+            let visible_rows = usize::from(shell[2].height.saturating_sub(2) / 2).max(1);
+            let offset = project_list_offset(app.selected, app.visible_count(), visible_rows);
+            let index = offset + usize::from((row - inner_top) / 2);
+            if index < app.visible_count() {
+                return Some(MouseAction::SelectProject(index));
+            }
+        }
+    }
+    None
+}
+
+fn tab_at(area: Rect, column: u16) -> Option<Tab> {
+    let labels = Tab::ALL.map(|tab| format!(" {}:{} ", tab as usize + 1, tab.label()));
+    let total = 1 + labels
+        .iter()
+        .map(|label| label.chars().count() + 1)
+        .sum::<usize>();
+    let mut start = area.x + area.width.saturating_sub(total as u16) / 2 + 1;
+    for (tab, label) in Tab::ALL.into_iter().zip(labels) {
+        let end = start.saturating_add(label.chars().count() as u16);
+        if column >= start && column < end {
+            return Some(tab);
+        }
+        start = end.saturating_add(1);
+    }
+    None
+}
+
+fn footer_action_at(tab: Tab, width: u16, column: u16) -> Option<MouseAction> {
+    let controls = footer_controls(tab, width);
+    let start = width.saturating_sub(controls.chars().count() as u16);
+    if column < start {
+        return None;
+    }
+    let local = usize::from(column.saturating_sub(start));
+    [
+        ("a analyze", MouseAction::Analyze),
+        ("p payload", MouseAction::Payload),
+        ("s sort", MouseAction::Sort),
+        ("r/R refresh", MouseAction::Refresh),
+        ("r refresh", MouseAction::Refresh),
+        ("o open", MouseAction::Open),
+        ("? help", MouseAction::Help),
+        ("q quit", MouseAction::Quit),
+    ]
+    .into_iter()
+    .find_map(|(needle, action)| {
+        let offset = controls.find(needle)?;
+        (local >= offset && local < offset + needle.chars().count()).then_some(action)
+    })
+}
+
 pub fn draw(frame: &mut Frame<'_>, app: &App, theme: Theme) {
     let area = frame.area();
 
@@ -42,6 +130,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, theme: Theme) {
     }
     draw_footer(frame, app, theme, shell[3]);
 
+    if app.show_ai_payload {
+        draw_ai_payload(frame, app, theme, area);
+    }
     if app.show_help {
         draw_help(frame, theme, area);
     }
@@ -181,8 +272,19 @@ fn draw_projects(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         ))
         .highlight_style(Style::default().add_modifier(Modifier::BOLD))
         .highlight_symbol("›");
-    let mut state = ListState::default().with_selected(Some(app.selected));
+    let visible_rows = usize::from(area.height.saturating_sub(2) / 2).max(1);
+    let offset = project_list_offset(app.selected, app.visible_count(), visible_rows);
+    let mut state = ListState::default()
+        .with_selected(Some(app.selected))
+        .with_offset(offset);
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn project_list_offset(selected: usize, count: usize, visible_rows: usize) -> usize {
+    selected
+        .saturating_add(1)
+        .saturating_sub(visible_rows)
+        .min(count.saturating_sub(visible_rows))
 }
 
 fn draw_detail(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
@@ -205,7 +307,229 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         Tab::Delivery => draw_delivery(frame, project, theme, area),
         Tab::Cairn => draw_cairn(frame, project, theme, area),
         Tab::Portfolio => {}
+        Tab::Insight => draw_ai(frame, app, project, theme, area),
     }
+}
+
+fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, area: Rect) {
+    let credential = app
+        .ai_credential_source
+        .as_deref()
+        .map(|source| format!("key · {source}"))
+        .unwrap_or_else(|| "key · missing".into());
+    let stale = app.current_ai_is_stale();
+
+    if app.is_ai_loading() {
+        let lines = vec![
+            Line::from(Span::styled(
+                "Analyzing bounded project metrics…",
+                Style::default()
+                    .fg(theme.secondary)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled(" MODEL  ", Style::default().fg(theme.faint)),
+                Span::styled(app.ai_model.clone(), Style::default().fg(theme.text)),
+            ]),
+            Line::from(Span::styled(
+                "The local dashboard remains responsive while OpenRouter works.",
+                Style::default().fg(theme.muted),
+            )),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines).wrap(Wrap { trim: true }).block(panel(
+                " AI INSIGHT · WORKING ",
+                theme,
+                true,
+            )),
+            Rect {
+                height: area.height.min(10),
+                ..area
+            },
+        );
+        return;
+    }
+
+    if let Some(report) = app.current_ai_report() {
+        if area.height < 24 {
+            let mut lines = vec![
+                Line::from(Span::styled(
+                    report.summary.clone(),
+                    Style::default().fg(theme.text),
+                )),
+                Line::raw(""),
+                Line::from(Span::styled(
+                    "OBSERVATIONS",
+                    Style::default()
+                        .fg(theme.secondary)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            ];
+            let observations = report
+                .observations
+                .iter()
+                .take(2)
+                .cloned()
+                .collect::<Vec<_>>();
+            lines.extend(ai_bullets(&observations, theme.secondary, theme));
+            lines.push(Line::from(Span::styled(
+                "RISKS",
+                Style::default().fg(theme.warn).add_modifier(Modifier::BOLD),
+            )));
+            let risks = report.risks.iter().take(2).cloned().collect::<Vec<_>>();
+            lines.extend(ai_bullets(&risks, theme.warn, theme));
+            lines.push(Line::from(vec![
+                Span::styled("NEXT  ", Style::default().fg(theme.good)),
+                Span::styled(
+                    report.next_action.clone(),
+                    Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            frame.render_widget(
+                Paragraph::new(lines).wrap(Wrap { trim: true }).block(panel(
+                    format!(" AI BRIEF · {} ", project.name),
+                    theme,
+                    true,
+                )),
+                area,
+            );
+            return;
+        }
+        let rows = Layout::vertical([
+            Constraint::Length(7),
+            Constraint::Min(9),
+            Constraint::Length(7),
+        ])
+        .spacing(1)
+        .split(area);
+        let token_note = report
+            .total_tokens
+            .map(|tokens| format!(" · {tokens} tokens"))
+            .unwrap_or_default();
+        let state_note = if stale {
+            " · metrics changed"
+        } else {
+            " · current"
+        };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    report.summary.clone(),
+                    Style::default().fg(theme.text),
+                )),
+                Line::raw(""),
+                Line::from(Span::styled(
+                    format!(" {}{token_note}{state_note}", report.model),
+                    Style::default().fg(if stale { theme.warn } else { theme.faint }),
+                )),
+            ])
+            .wrap(Wrap { trim: true })
+            .block(panel(format!(" AI BRIEF · {} ", project.name), theme, true)),
+            rows[0],
+        );
+        let columns = Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
+            .spacing(1)
+            .split(rows[1]);
+        frame.render_widget(
+            Paragraph::new(ai_bullets(&report.observations, theme.secondary, theme))
+                .wrap(Wrap { trim: true })
+                .block(panel(" OBSERVATIONS ", theme, true)),
+            columns[0],
+        );
+        frame.render_widget(
+            Paragraph::new(ai_bullets(&report.risks, theme.warn, theme))
+                .wrap(Wrap { trim: true })
+                .block(panel(" RISKS ", theme, true)),
+            columns[1],
+        );
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(" → ", Style::default().fg(theme.good)),
+                    Span::styled(
+                        report.next_action.clone(),
+                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::raw(""),
+                Line::from(Span::styled(
+                    " a refresh analysis   p inspect exact payload",
+                    Style::default().fg(theme.faint),
+                )),
+            ])
+            .wrap(Wrap { trim: true })
+            .block(panel(" HIGHEST-LEVERAGE NEXT ACTION ", theme, true)),
+            rows[2],
+        );
+        return;
+    }
+
+    let error = app.ai_error.as_deref();
+    let ready = error.is_none() && app.ai_credential_source.is_some();
+    let lines = vec![
+        Line::from(Span::styled(
+            error.unwrap_or(if ready {
+                "Ready when you are. Nothing has been sent."
+            } else {
+                "Add an OpenRouter key before requesting analysis."
+            }),
+            Style::default()
+                .fg(if error.is_some() {
+                    theme.bad
+                } else {
+                    theme.text
+                })
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::raw(""),
+        field("Provider", "OpenRouter", theme),
+        field("Model", &app.ai_model, theme),
+        field("Credential", &credential, theme),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(" p ", theme.selected()),
+            Span::styled(
+                "preview the exact metrics-only JSON",
+                Style::default().fg(theme.muted),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(" a ", theme.selected()),
+            Span::styled(
+                "send it and generate a project brief",
+                Style::default().fg(theme.muted),
+            ),
+        ]),
+        Line::raw(""),
+        Line::from(Span::styled(
+            "No paths, URLs, descriptions, commit messages, source code, or Cairn item titles are included.",
+            Style::default().fg(theme.faint),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: true }).block(panel(
+            " AI INSIGHT · OPT-IN ",
+            theme,
+            true,
+        )),
+        Rect {
+            height: area.height.min(16),
+            ..area
+        },
+    );
+}
+
+fn ai_bullets(items: &[String], color: ratatui::style::Color, theme: Theme) -> Vec<Line<'static>> {
+    items
+        .iter()
+        .map(|item| {
+            Line::from(vec![
+                Span::styled(" • ", Style::default().fg(color)),
+                Span::styled(item.clone(), Style::default().fg(theme.text)),
+            ])
+        })
+        .collect()
 }
 
 fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
@@ -1456,15 +1780,16 @@ fn draw_footer(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         frame.render_widget(Paragraph::new(prompt), area);
         return;
     }
-    let error = app.remote_error.as_deref().unwrap_or(&app.message);
-    let left = format!(" {error}");
-    let right = if area.width < 72 {
-        " ? help  q quit "
-    } else if area.width < 110 {
-        " ↑↓ select  ←→ view  / find  r refresh  ? help "
+    let error = if app.tab == Tab::Insight {
+        app.ai_error
+            .as_deref()
+            .or(app.remote_error.as_deref())
+            .unwrap_or(&app.message)
     } else {
-        " ↑↓ select  ←→ view  / filter  s sort  r/R refresh  o open  ? help  q quit "
+        app.remote_error.as_deref().unwrap_or(&app.message)
     };
+    let left = format!(" {error}");
+    let right = footer_controls(app.tab, area.width);
     let chunks = Layout::horizontal([
         Constraint::Min(10),
         Constraint::Length(right.chars().count() as u16),
@@ -1482,9 +1807,54 @@ fn draw_footer(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     );
 }
 
+fn footer_controls(tab: Tab, width: u16) -> &'static str {
+    if tab == Tab::Insight && width >= 92 {
+        " a analyze  p payload  ↑↓ select  ←→ view  ? help  q quit "
+    } else if width < 72 {
+        " ? help  q quit "
+    } else if width < 110 {
+        " ↑↓ select  ←→ view  / find  r refresh  ? help "
+    } else {
+        " ↑↓ select  ←→ view  / filter  s sort  r/R refresh  o open  ? help  q quit "
+    }
+}
+
+fn draw_ai_payload(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
+    let width = area.width.saturating_sub(4).min(110);
+    let height = area.height.saturating_sub(4).min(24);
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let payload = app.current_ai_payload().unwrap_or_else(|| "{}".to_string());
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                "This is the complete request snapshot. The API key and prompt are never shown here.",
+                Style::default().fg(theme.muted),
+            )),
+            Line::raw(""),
+            Line::from(Span::styled(payload, Style::default().fg(theme.text))),
+        ])
+        .wrap(Wrap { trim: true })
+        .block(
+            panel(" OUTBOUND AI PAYLOAD · METRICS ONLY ", theme, true)
+                .border_type(BorderType::Rounded)
+                .title_bottom(
+                    Line::from(" p/esc close · a analyze · --ai-payload prints full JSON ")
+                        .right_aligned(),
+                ),
+        ),
+        popup,
+    );
+}
+
 fn draw_help(frame: &mut Frame<'_>, theme: Theme, area: Rect) {
     let width = area.width.saturating_sub(4).min(76);
-    let height = area.height.saturating_sub(4).min(18);
+    let height = area.height.saturating_sub(2).min(20);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -1507,7 +1877,9 @@ fn draw_help(frame: &mut Frame<'_>, theme: Theme, area: Rect) {
         Line::from(vec![key("k / ↑"), note("previous project")]),
         Line::from(vec![key("g / G"), note("first / last project")]),
         Line::from(vec![key("h / l"), note("previous / next view")]),
-        Line::from(vec![key("1 … 5"), note("jump directly to a view")]),
+        Line::from(vec![key("1 … 6"), note("jump directly to a view")]),
+        Line::from(vec![key("a"), note("analyze in the Insight view")]),
+        Line::from(vec![key("p"), note("preview the outbound AI payload")]),
         Line::raw(""),
         Line::from(vec![
             key("/"),
@@ -1517,13 +1889,18 @@ fn draw_help(frame: &mut Frame<'_>, theme: Theme, area: Rect) {
         Line::from(vec![key("r / R"), note("rescan local / refresh remote")]),
         Line::from(vec![key("o / enter"), note("open the selected project")]),
         Line::raw(""),
+        Line::from(vec![
+            key("mouse"),
+            note("click tabs, projects, and footer commands"),
+        ]),
+        Line::from(vec![key("wheel"), note("move through projects")]),
         Line::from(vec![key("? / esc"), note("close this guide")]),
     ];
     frame.render_widget(
         Paragraph::new(lines).block(
             panel(" KEYBOARD ", theme, true)
                 .border_type(BorderType::Rounded)
-                .title_bottom(Line::from(" terminal-native · no mouse required ").right_aligned()),
+                .title_bottom(Line::from(" mouse supported · keyboard complete ").right_aligned()),
         ),
         popup,
     );
@@ -1610,5 +1987,47 @@ mod tests {
     fn activity_strips_normalize_recent_values() {
         assert_eq!(activity_strip(&[0, 1, 2], 5), "  ▁▄█");
         assert_eq!(activity_strip(&[], 3), "   ");
+    }
+
+    #[test]
+    fn every_tab_has_a_click_target() {
+        let area = Rect::new(0, 2, 140, 2);
+        for expected in Tab::ALL {
+            assert!(
+                (0..area.width).any(|column| tab_at(area, column) == Some(expected)),
+                "{} tab has no click target",
+                expected.label()
+            );
+        }
+    }
+
+    #[test]
+    fn insight_footer_commands_are_clickable() {
+        let width = 140;
+        let controls = footer_controls(Tab::Insight, width);
+        let start = width - controls.chars().count() as u16;
+        let analyze = controls
+            .find("a analyze")
+            .unwrap_or_else(|| panic!("analyze control is missing"));
+        let payload = controls
+            .find("p payload")
+            .unwrap_or_else(|| panic!("payload control is missing"));
+
+        assert_eq!(
+            footer_action_at(Tab::Insight, width, start + analyze as u16 + 1),
+            Some(MouseAction::Analyze)
+        );
+        assert_eq!(
+            footer_action_at(Tab::Insight, width, start + payload as u16 + 1),
+            Some(MouseAction::Payload)
+        );
+        assert_eq!(footer_action_at(Tab::Insight, width, 0), None);
+    }
+
+    #[test]
+    fn project_list_offset_keeps_selection_visible() {
+        assert_eq!(project_list_offset(0, 20, 5), 0);
+        assert_eq!(project_list_offset(7, 20, 5), 3);
+        assert_eq!(project_list_offset(19, 20, 5), 15);
     }
 }

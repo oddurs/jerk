@@ -4,15 +4,20 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
+    MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use jerk::app::{App, Tab};
 use jerk::theme::Theme;
+use jerk::ui::MouseAction;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::layout::Rect;
 use serde::Serialize;
 
 fn main() -> Result<()> {
@@ -27,6 +32,7 @@ fn main() -> Result<()> {
     }
     let plain = args.iter().any(|arg| arg == "--plain");
     let json = args.iter().any(|arg| arg == "--json");
+    let ai_payload = args.iter().any(|arg| arg == "--ai-payload");
     let root = args
         .iter()
         .find(|arg| !arg.starts_with('-'))
@@ -39,6 +45,9 @@ fn main() -> Result<()> {
     if json {
         return print_json(&root);
     }
+    if ai_payload {
+        return print_ai_payload(&root);
+    }
     if plain || !io::stdout().is_terminal() {
         return print_plain(&root);
     }
@@ -48,9 +57,10 @@ fn main() -> Result<()> {
 fn print_help() {
     println!(
         "jerk — project pulse from the terminal\n\n\
-         USAGE:\n  jerk [DIRECTORY] [--plain | --json]\n\n\
+         USAGE:\n  jerk [DIRECTORY] [--plain | --json | --ai-payload]\n\n\
          Scans a repository, or every immediate Git repository below DIRECTORY.\n\n\
-         KEYS:\n  ↑/k ↓/j   select project\n  g/G       first/last project\n  ←/h →/l   change view\n  1–5       jump to view\n  /         filter projects\n  s         cycle project ordering\n  r         rescan local data\n  R         refresh GitHub and deployment health\n  o         open project in the system file browser\n  ?         keyboard guide\n  q         quit\n"
+         PRIVACY:\n  --ai-payload prints the exact metrics-only JSON used for AI analysis.\n\n\
+         KEYS:\n  ↑/k ↓/j   select project\n  g/G       first/last project\n  ←/h →/l   change view\n  1–6       jump to view\n  a         analyze from the Insight view\n  p         preview the outbound AI payload\n  /         filter projects\n  s         cycle project ordering\n  r         rescan local data\n  R         refresh GitHub and deployment health\n  o         open project in the system file browser\n  ?         keyboard guide\n  q         quit\n"
     );
 }
 
@@ -74,6 +84,19 @@ fn print_json(root: &std::path::Path) -> Result<()> {
         projects: jerk::scan::scan_all(root),
     };
     println!("{}", serde_json::to_string_pretty(&snapshot)?);
+    Ok(())
+}
+
+fn print_ai_payload(root: &std::path::Path) -> Result<()> {
+    let snapshots = jerk::scan::scan_all(root)
+        .iter()
+        .map(jerk::ai::AiSnapshot::from_project)
+        .collect::<Vec<_>>();
+    if snapshots.len() == 1 {
+        println!("{}", serde_json::to_string_pretty(&snapshots[0])?);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&snapshots)?);
+    }
     Ok(())
 }
 
@@ -135,7 +158,14 @@ fn run(root: PathBuf) -> Result<()> {
         if !event::poll(Duration::from_millis(120))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else {
+        let input = event::read()?;
+        if let Event::Mouse(mouse) = input {
+            if handle_mouse(&mut app, mouse) {
+                break;
+            }
+            continue;
+        }
+        let Event::Key(key) = input else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
@@ -144,6 +174,19 @@ fn run(root: PathBuf) -> Result<()> {
         if app.show_help {
             match key.code {
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => app.toggle_help(),
+                _ => {}
+            }
+            continue;
+        }
+        if app.show_ai_payload {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('p') | KeyCode::Char('q') => {
+                    app.toggle_ai_payload();
+                }
+                KeyCode::Char('a') => {
+                    app.toggle_ai_payload();
+                    app.request_analysis();
+                }
                 _ => {}
             }
             continue;
@@ -173,6 +216,9 @@ fn run(root: PathBuf) -> Result<()> {
             KeyCode::Char('3') => app.select_tab(Tab::Delivery),
             KeyCode::Char('4') => app.select_tab(Tab::Cairn),
             KeyCode::Char('5') => app.select_tab(Tab::Portfolio),
+            KeyCode::Char('6') => app.select_tab(Tab::Insight),
+            KeyCode::Char('a') if app.tab == Tab::Insight => app.request_analysis(),
+            KeyCode::Char('p') if app.tab == Tab::Insight => app.toggle_ai_payload(),
             KeyCode::Char('r') => app.refresh_local(),
             KeyCode::Char('R') => app.refresh_remote(),
             KeyCode::Char('s') => app.cycle_sort(),
@@ -187,6 +233,61 @@ fn run(root: PathBuf) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            app.select_next();
+            return false;
+        }
+        MouseEventKind::ScrollUp => {
+            app.select_previous();
+            return false;
+        }
+        MouseEventKind::Down(MouseButton::Left) => {}
+        _ => return false,
+    }
+    let Ok((width, height)) = crossterm::terminal::size() else {
+        return false;
+    };
+    let Some(action) =
+        jerk::ui::mouse_action(app, Rect::new(0, 0, width, height), mouse.column, mouse.row)
+    else {
+        return false;
+    };
+    match action {
+        MouseAction::SelectTab(tab) => app.select_tab(tab),
+        MouseAction::SelectProject(index) => app.select_index(index),
+        MouseAction::Analyze => {
+            if app.show_ai_payload {
+                app.toggle_ai_payload();
+            }
+            app.select_tab(Tab::Insight);
+            app.request_analysis();
+        }
+        MouseAction::Payload => {
+            app.select_tab(Tab::Insight);
+            app.toggle_ai_payload();
+        }
+        MouseAction::Refresh => app.refresh_remote(),
+        MouseAction::Sort => app.cycle_sort(),
+        MouseAction::Open => {
+            if let Some(path) = app.open_target() {
+                open(path);
+            }
+        }
+        MouseAction::Help => app.toggle_help(),
+        MouseAction::Quit => return true,
+        MouseAction::CloseOverlay => {
+            if app.show_help {
+                app.toggle_help();
+            } else if app.show_ai_payload {
+                app.toggle_ai_payload();
+            }
+        }
+    }
+    false
 }
 
 fn open(path: &std::path::Path) {
@@ -229,11 +330,20 @@ impl TerminalGuard {
     fn enter() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+            let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
             let _ = disable_raw_mode();
             return Err(error.into());
         }
-        let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        let terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                let mut cleanup = io::stdout();
+                let _ = execute!(cleanup, DisableMouseCapture, LeaveAlternateScreen);
+                let _ = disable_raw_mode();
+                return Err(error.into());
+            }
+        };
         Ok(Self { terminal })
     }
 }
@@ -241,7 +351,11 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
         let _ = self.terminal.show_cursor();
     }
 }

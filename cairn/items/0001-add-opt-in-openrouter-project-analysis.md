@@ -2,7 +2,7 @@
 id: 1
 title: Add opt-in OpenRouter project analysis
 type: feature
-status: backlog
+status: done
 priority: p2
 area: ai
 created: 2026-09-18
@@ -19,8 +19,8 @@ Add an opt-in OpenRouter analysis panel behind a small provider interface. Read 
 
 ## Acceptance criteria
 
-- [ ] No source code or file content is sent by default.
-- [ ] The outbound snapshot can be previewed.
-- [ ] Keys never enter repository configuration or logs.
-- [ ] Offline and provider failures leave every existing view usable.
-- [ ] The summary distinguishes observations from recommendations.
+- [x] No source code or file content is sent by default.
+- [x] The outbound snapshot can be previewed.
+- [x] Keys never enter repository configuration or logs.
+- [x] Offline and provider failures leave every existing view usable.
+- [x] The summary distinguishes observations from recommendations.

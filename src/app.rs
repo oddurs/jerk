@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 
+use crate::ai::{self, AiReport, AiSnapshot, AnalysisProvider};
 use crate::model::Project;
 use crate::remote::{self, GithubPortfolio, RemoteUpdate};
 use crate::scan;
@@ -14,15 +15,17 @@ pub enum Tab {
     Delivery,
     Cairn,
     Portfolio,
+    Insight,
 }
 
 impl Tab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Overview,
         Self::Git,
         Self::Delivery,
         Self::Cairn,
         Self::Portfolio,
+        Self::Insight,
     ];
 
     pub fn label(self) -> &'static str {
@@ -32,6 +35,7 @@ impl Tab {
             Self::Delivery => "Delivery",
             Self::Cairn => "Cairn",
             Self::Portfolio => "Portfolio",
+            Self::Insight => "Insight",
         }
     }
 
@@ -80,10 +84,14 @@ pub struct App {
     pub filter: String,
     pub searching: bool,
     pub show_help: bool,
+    pub show_ai_payload: bool,
     pub portfolio: Option<GithubPortfolio>,
     pub portfolio_loading: bool,
     pub message: String,
     pub remote_error: Option<String>,
+    pub ai_error: Option<String>,
+    pub ai_credential_source: Option<String>,
+    pub ai_model: String,
     loading: HashSet<PathBuf>,
     loaded: HashSet<PathBuf>,
     tx: Sender<RemoteUpdate>,
@@ -92,6 +100,21 @@ pub struct App {
     scan_rx: Receiver<Vec<Project>>,
     portfolio_tx: Sender<Result<GithubPortfolio, String>>,
     portfolio_rx: Receiver<Result<GithubPortfolio, String>>,
+    ai_entries: HashMap<PathBuf, AiEntry>,
+    ai_loading: HashSet<PathBuf>,
+    ai_tx: Sender<AiUpdate>,
+    ai_rx: Receiver<AiUpdate>,
+}
+
+struct AiEntry {
+    fingerprint: String,
+    report: AiReport,
+}
+
+struct AiUpdate {
+    path: PathBuf,
+    fingerprint: String,
+    result: Result<AiReport, String>,
 }
 
 impl App {
@@ -99,6 +122,7 @@ impl App {
         let (tx, rx) = mpsc::channel();
         let (scan_tx, scan_rx) = mpsc::channel();
         let (portfolio_tx, portfolio_rx) = mpsc::channel();
+        let (ai_tx, ai_rx) = mpsc::channel();
         let app = Self {
             root,
             projects: Vec::new(),
@@ -109,10 +133,14 @@ impl App {
             filter: String::new(),
             searching: false,
             show_help: false,
+            show_ai_payload: false,
             portfolio: None,
             portfolio_loading: false,
             message: "scanning local repositories…".into(),
             remote_error: None,
+            ai_error: None,
+            ai_credential_source: ai::credential_source().map(|source| source.label().to_string()),
+            ai_model: ai::OpenRouter::model(),
             loading: HashSet::new(),
             loaded: HashSet::new(),
             tx,
@@ -121,6 +149,10 @@ impl App {
             scan_rx,
             portfolio_tx,
             portfolio_rx,
+            ai_entries: HashMap::new(),
+            ai_loading: HashSet::new(),
+            ai_tx,
+            ai_rx,
         };
         app.start_scan();
         app
@@ -146,11 +178,39 @@ impl App {
             .is_some_and(|p| self.loading.contains(&p.path))
     }
 
+    pub fn is_ai_loading(&self) -> bool {
+        self.current()
+            .is_some_and(|project| self.ai_loading.contains(&project.path))
+    }
+
+    pub fn current_ai_report(&self) -> Option<&AiReport> {
+        let project = self.current()?;
+        self.ai_entries
+            .get(&project.path)
+            .map(|entry| &entry.report)
+    }
+
+    pub fn current_ai_is_stale(&self) -> bool {
+        let Some(project) = self.current() else {
+            return false;
+        };
+        self.ai_entries.get(&project.path).is_some_and(|entry| {
+            entry.fingerprint != AiSnapshot::from_project(project).fingerprint()
+        })
+    }
+
+    pub fn current_ai_payload(&self) -> Option<String> {
+        self.current()
+            .map(AiSnapshot::from_project)
+            .map(|snapshot| snapshot.compact_json())
+    }
+
     pub fn select_next(&mut self) {
         let count = self.visible_count();
         if count > 0 {
             self.selected = (self.selected + 1) % count;
             self.remote_error = None;
+            self.ai_error = None;
             self.ensure_remote();
         }
     }
@@ -160,6 +220,7 @@ impl App {
         if count > 0 {
             self.selected = (self.selected + count - 1) % count;
             self.remote_error = None;
+            self.ai_error = None;
             self.ensure_remote();
         }
     }
@@ -168,6 +229,7 @@ impl App {
         if self.visible_count() > 0 {
             self.selected = 0;
             self.remote_error = None;
+            self.ai_error = None;
             self.ensure_remote();
         }
     }
@@ -177,12 +239,62 @@ impl App {
         if count > 0 {
             self.selected = count - 1;
             self.remote_error = None;
+            self.ai_error = None;
+            self.ensure_remote();
+        }
+    }
+
+    pub fn select_index(&mut self, index: usize) {
+        if index < self.visible_count() {
+            self.selected = index;
+            self.remote_error = None;
+            self.ai_error = None;
             self.ensure_remote();
         }
     }
 
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    pub fn toggle_ai_payload(&mut self) {
+        self.show_ai_payload = !self.show_ai_payload;
+    }
+
+    pub fn request_analysis(&mut self) {
+        let Some(project) = self.current().cloned() else {
+            return;
+        };
+        if self.ai_loading.contains(&project.path) {
+            return;
+        }
+        let snapshot = AiSnapshot::from_project(&project);
+        let fingerprint = snapshot.fingerprint();
+        if self
+            .ai_entries
+            .get(&project.path)
+            .is_some_and(|entry| entry.fingerprint == fingerprint)
+        {
+            self.message = "AI brief is current · using cached analysis".into();
+            return;
+        }
+        if self.ai_credential_source.is_none() {
+            self.ai_error = Some(ai::missing_key_message().into());
+            return;
+        }
+        self.ai_loading.insert(project.path.clone());
+        self.ai_error = None;
+        self.message = format!("analyzing bounded metrics with {}…", self.ai_model);
+        let path = project.path;
+        let tx = self.ai_tx.clone();
+        std::thread::spawn(move || {
+            let result = ai::OpenRouter::load().and_then(|provider| provider.analyze(&snapshot));
+            let _ = tx.send(AiUpdate {
+                path,
+                fingerprint,
+                result,
+            });
+        });
     }
 
     pub fn refresh_local(&mut self) {
@@ -262,6 +374,26 @@ impl App {
             }
             self.remote_error = update.error;
             self.message = "remote scan complete".into();
+        }
+        while let Ok(update) = self.ai_rx.try_recv() {
+            self.ai_loading.remove(&update.path);
+            match update.result {
+                Ok(report) => {
+                    self.message = format!("AI brief ready · {}", report.model);
+                    self.ai_entries.insert(
+                        update.path,
+                        AiEntry {
+                            fingerprint: update.fingerprint,
+                            report,
+                        },
+                    );
+                    self.ai_error = None;
+                }
+                Err(error) => {
+                    self.message = "AI analysis unavailable · local dashboard unaffected".into();
+                    self.ai_error = Some(error);
+                }
+            }
         }
         if score_changed && self.sort == ProjectSort::NeedsAttention {
             let selected = self.current().map(|project| project.path.clone());
