@@ -6,6 +6,7 @@ use crate::ai::{self, AiReport, AiSnapshot, AnalysisProvider};
 use crate::model::Project;
 use crate::remote::{self, GithubPortfolio, RemoteUpdate};
 use crate::scan;
+use crate::settings::DashboardSettings;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tab {
@@ -76,6 +77,7 @@ impl ProjectSort {
 
 pub struct App {
     pub root: PathBuf,
+    pub dashboard: DashboardSettings,
     pub projects: Vec<Project>,
     pub selected: usize,
     pub tab: Tab,
@@ -92,6 +94,7 @@ pub struct App {
     pub ai_error: Option<String>,
     pub ai_credential_source: Option<String>,
     pub ai_model: String,
+    pub github_owner: Option<String>,
     loading: HashSet<PathBuf>,
     loaded: HashSet<PathBuf>,
     tx: Sender<RemoteUpdate>,
@@ -119,16 +122,22 @@ struct AiUpdate {
 
 impl App {
     pub fn new(root: PathBuf) -> Self {
+        Self::with_preferences(root, DashboardSettings::default())
+    }
+
+    pub fn with_preferences(root: PathBuf, dashboard: DashboardSettings) -> Self {
         let (tx, rx) = mpsc::channel();
         let (scan_tx, scan_rx) = mpsc::channel();
         let (portfolio_tx, portfolio_rx) = mpsc::channel();
         let (ai_tx, ai_rx) = mpsc::channel();
         let app = Self {
             root,
+            github_owner: dashboard.github_owner.clone(),
+            dashboard: dashboard.clone(),
             projects: Vec::new(),
             selected: 0,
-            tab: Tab::Overview,
-            sort: ProjectSort::Name,
+            tab: dashboard.tab(),
+            sort: dashboard.sort(),
             scanning: true,
             filter: String::new(),
             searching: false,
@@ -473,11 +482,13 @@ impl App {
                 *owners.entry(owner.to_string()).or_default() += 1;
             }
         }
-        let Some(owner) = owners
-            .into_iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|(owner, _)| owner)
-        else {
+        let owner = self.github_owner.clone().or_else(|| {
+            owners
+                .into_iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(owner, _)| owner)
+        });
+        let Some(owner) = owner else {
             return;
         };
         self.portfolio_loading = true;

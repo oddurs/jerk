@@ -142,12 +142,15 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     let current = app.current();
     let title = Line::from(vec![
         Span::styled(
-            " JERK",
+            format!(" {}", app.dashboard.brand),
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  project pulse", Style::default().fg(theme.faint)),
+        Span::styled(
+            format!("  {}", app.dashboard.workspace),
+            Style::default().fg(theme.faint),
+        ),
         Span::styled(
             current
                 .map(|project| format!("  / {}", project.name))

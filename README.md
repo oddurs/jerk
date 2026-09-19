@@ -38,6 +38,29 @@ cargo install --path .
 jerk ~/Code
 ```
 
+### Personal dashboard settings
+
+`jerk` keeps personal preferences separate from repository `.jerk.toml` files. Run this once to create an editable template in the platform’s normal config directory:
+
+```sh
+jerk --init-config
+```
+
+The template lets you set the identity shown in the header, the default scan root, the first view and project ordering, a pinned GitHub owner for portfolio stats, and an ANSI accent role that still inherits the active Ghostty or parent-shell palette. Use `--config PATH` or `JERK_CONFIG` when you want a different profile, such as a work dashboard:
+
+```toml
+[dashboard]
+brand = "ODDURS"
+workspace = "studio"
+root = "~/Code"
+default_view = "portfolio"
+default_sort = "attention"
+github_owner = "your-handle"
+accent = "cyan"
+```
+
+A command-line directory always takes precedence over the configured root. Missing or invalid personal config never prevents local scanning; the warning appears in the dashboard footer.
+
 On Windows PowerShell, for example:
 
 ```powershell

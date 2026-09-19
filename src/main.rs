@@ -13,6 +13,7 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use jerk::app::{App, Tab};
+use jerk::settings;
 use jerk::theme::Theme;
 use jerk::ui::MouseAction;
 use ratatui::Terminal;
@@ -30,13 +31,19 @@ fn main() -> Result<()> {
         println!("jerk {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    let config_arg = option_value(&args, "--config").map(PathBuf::from);
+    if args.iter().any(|arg| arg == "--init-config") {
+        let path = settings::write_example(config_arg.as_deref())
+            .with_context(|| "could not initialize the jerk personal config")?;
+        println!("created {}", path.display());
+        return Ok(());
+    }
+    let (settings, _config_path, config_warning) = settings::load(config_arg.as_deref());
     let plain = args.iter().any(|arg| arg == "--plain");
     let json = args.iter().any(|arg| arg == "--json");
     let ai_payload = args.iter().any(|arg| arg == "--ai-payload");
-    let root = args
-        .iter()
-        .find(|arg| !arg.starts_with('-'))
-        .map(PathBuf::from)
+    let root = positional_root(&args)
+        .or_else(|| settings.dashboard.root_path())
         .unwrap_or(std::env::current_dir().context("cannot determine current directory")?);
     let root = root
         .canonicalize()
@@ -51,14 +58,46 @@ fn main() -> Result<()> {
     if plain || !io::stdout().is_terminal() {
         return print_plain(&root);
     }
-    run(root)
+    run(root, settings, config_warning)
+}
+
+fn option_value(args: &[String], name: &str) -> Option<String> {
+    args.iter().enumerate().find_map(|(index, arg)| {
+        if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
+            return Some(value.to_string());
+        }
+        (arg == name)
+            .then(|| args.get(index + 1))
+            .flatten()
+            .cloned()
+    })
+}
+
+fn positional_root(args: &[String]) -> Option<PathBuf> {
+    let mut skip_next = false;
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--config" {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        return Some(PathBuf::from(arg));
+    }
+    None
 }
 
 fn print_help() {
     println!(
         "jerk — project pulse from the terminal\n\n\
-         USAGE:\n  jerk [DIRECTORY] [--plain | --json | --ai-payload]\n\n\
+         USAGE:\n  jerk [DIRECTORY] [OPTIONS]\n\n\
          Scans a repository, or every immediate Git repository below DIRECTORY.\n\n\
+         PERSONAL CONFIG:\n  --config PATH       use a personal config file\n  --init-config       create the OS-appropriate config template\n\n\
          PRIVACY:\n  --ai-payload prints the exact metrics-only JSON used for AI analysis.\n\n\
          KEYS:\n  ↑/k ↓/j   select project\n  g/G       first/last project\n  ←/h →/l   change view\n  1–6       jump to view\n  a         analyze from the Insight view\n  p         preview the outbound AI payload\n  /         filter projects\n  s         cycle project ordering\n  r         rescan local data\n  R         refresh GitHub and deployment health\n  o         open project in the system file browser\n  ?         keyboard guide\n  q         quit\n"
     );
@@ -145,10 +184,13 @@ fn truncate(value: &str, width: usize) -> String {
     out
 }
 
-fn run(root: PathBuf) -> Result<()> {
+fn run(root: PathBuf, dashboard: settings::Settings, config_warning: Option<String>) -> Result<()> {
     let mut guard = TerminalGuard::enter()?;
-    let mut app = App::new(root);
-    let theme = Theme::terminal();
+    let mut app = App::with_preferences(root, dashboard.dashboard);
+    if let Some(warning) = config_warning {
+        app.message = warning;
+    }
+    let theme = Theme::terminal_with_accent(Some(&app.dashboard.accent));
 
     loop {
         app.poll();

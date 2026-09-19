@@ -17,6 +17,10 @@ pub struct Theme {
 
 impl Theme {
     pub fn terminal() -> Self {
+        Self::terminal_with_accent(None)
+    }
+
+    pub fn terminal_with_accent(accent: Option<&str>) -> Self {
         let monochrome = std::env::var_os("NO_COLOR").is_some();
         if monochrome {
             return Self::mono();
@@ -27,7 +31,7 @@ impl Theme {
             text: Color::Reset,
             muted: Color::Gray,
             faint: Color::DarkGray,
-            accent: Color::Blue,
+            accent: accent.and_then(ansi_color).unwrap_or(Color::Blue),
             secondary: Color::Cyan,
             good: Color::Green,
             warn: Color::Yellow,
@@ -68,6 +72,20 @@ impl Theme {
             50..=74 => self.warn,
             _ => self.bad,
         }
+    }
+}
+
+fn ansi_color(value: &str) -> Option<Color> {
+    match value.to_ascii_lowercase().as_str() {
+        "blue" => Some(Color::Blue),
+        "cyan" => Some(Color::Cyan),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "magenta" | "purple" => Some(Color::Magenta),
+        "red" => Some(Color::Red),
+        "white" | "gray" | "grey" => Some(Color::Gray),
+        "reset" | "default" => Some(Color::Reset),
+        _ => None,
     }
 }
 

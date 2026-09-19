@@ -7,5 +7,6 @@ pub mod model;
 pub mod remote;
 pub mod scan;
 pub mod schema;
+pub mod settings;
 pub mod theme;
 pub mod ui;
