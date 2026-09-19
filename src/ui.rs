@@ -25,17 +25,27 @@ pub enum MouseAction {
     CloseOverlay,
 }
 
+const SIDEBAR_WIDTH: u16 = 28;
+
+fn shell_areas(area: Rect) -> [Rect; 4] {
+    Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(12),
+        Constraint::Length(1),
+    ])
+    .areas(area)
+}
+
+fn tab_labels() -> [String; 6] {
+    Tab::ALL.map(|tab| format!(" {} {} ", tab as usize + 1, tab.label().to_lowercase()))
+}
+
 pub fn mouse_action(app: &App, area: Rect, column: u16, row: u16) -> Option<MouseAction> {
     if app.show_help || app.show_ai_payload {
         return Some(MouseAction::CloseOverlay);
     }
-    let shell = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Min(12),
-        Constraint::Length(1),
-    ])
-    .split(area);
+    let shell = shell_areas(area);
     if row >= shell[1].y && row < shell[1].y + shell[1].height {
         return tab_at(shell[1], column).map(MouseAction::SelectTab);
     }
@@ -43,13 +53,13 @@ pub fn mouse_action(app: &App, area: Rect, column: u16, row: u16) -> Option<Mous
         return footer_action_at(app.tab, area.width, column);
     }
     let has_sidebar = app.tab != Tab::Portfolio && shell[2].width >= 96 && app.visible_count() > 1;
-    if has_sidebar && column < shell[2].x + 32 {
+    if has_sidebar && column < shell[2].x + SIDEBAR_WIDTH {
         let inner_top = shell[2].y.saturating_add(1);
-        let inner_bottom = shell[2].y + shell[2].height.saturating_sub(1);
+        let inner_bottom = shell[2].y + shell[2].height;
         if row >= inner_top && row < inner_bottom {
-            let visible_rows = usize::from(shell[2].height.saturating_sub(2) / 2).max(1);
+            let visible_rows = usize::from(shell[2].height.saturating_sub(1)).max(1);
             let offset = project_list_offset(app.selected, app.visible_count(), visible_rows);
-            let index = offset + usize::from((row - inner_top) / 2);
+            let index = offset + usize::from(row - inner_top);
             if index < app.visible_count() {
                 return Some(MouseAction::SelectProject(index));
             }
@@ -59,18 +69,14 @@ pub fn mouse_action(app: &App, area: Rect, column: u16, row: u16) -> Option<Mous
 }
 
 fn tab_at(area: Rect, column: u16) -> Option<Tab> {
-    let labels = Tab::ALL.map(|tab| format!(" {}:{} ", tab as usize + 1, tab.label()));
-    let total = 1 + labels
-        .iter()
-        .map(|label| label.chars().count() + 1)
-        .sum::<usize>();
-    let mut start = area.x + area.width.saturating_sub(total as u16) / 2 + 1;
+    let labels = tab_labels();
+    let mut start = area.x.saturating_add(1);
     for (tab, label) in Tab::ALL.into_iter().zip(labels) {
         let end = start.saturating_add(label.chars().count() as u16);
         if column >= start && column < end {
             return Some(tab);
         }
-        start = end.saturating_add(1);
+        start = end;
     }
     None
 }
@@ -102,18 +108,12 @@ fn footer_action_at(tab: Tab, width: u16, column: u16) -> Option<MouseAction> {
 pub fn draw(frame: &mut Frame<'_>, app: &App, theme: Theme) {
     let area = frame.area();
 
-    if area.width < 72 || area.height < 20 {
+    if area.width < 72 || area.height < 16 {
         draw_too_small(frame, theme, area);
         return;
     }
 
-    let shell = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(2),
-        Constraint::Min(12),
-        Constraint::Length(1),
-    ])
-    .split(area);
+    let shell = shell_areas(area);
     draw_header(frame, app, theme, shell[0]);
     draw_tabs(frame, app, theme, shell[1]);
 
@@ -122,7 +122,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, theme: Theme) {
     } else if app.tab == Tab::Portfolio || shell[2].width < 96 || app.visible_count() == 1 {
         draw_detail(frame, app, theme, shell[2]);
     } else {
-        let columns = Layout::horizontal([Constraint::Length(32), Constraint::Min(60)])
+        let columns = Layout::horizontal([Constraint::Length(SIDEBAR_WIDTH), Constraint::Min(60)])
             .spacing(1)
             .split(shell[2]);
         draw_projects(frame, app, theme, columns[0]);
@@ -142,15 +142,15 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     let current = app.current();
     let title = Line::from(vec![
         Span::styled(
-            " JERK ",
+            " JERK",
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled("PROJECT PULSE", Style::default().fg(theme.faint)),
+        Span::styled("  project pulse", Style::default().fg(theme.faint)),
         Span::styled(
             current
-                .map(|project| format!("  /  {}", project.name))
+                .map(|project| format!("  / {}", project.name))
                 .unwrap_or_default(),
             Style::default().fg(theme.muted),
         ),
@@ -158,21 +158,21 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     let right = current
         .map(|project| {
             format!(
-                "{}  {:>3}/100  {} ",
+                "{}  {:>3}  {} ",
                 project.grade(),
                 project.score.total,
                 if app.is_loading() {
-                    "◌ SYNC"
+                    "◌ sync"
                 } else {
-                    "● LIVE"
+                    "● live"
                 }
             )
         })
         .unwrap_or_else(|| {
             if app.scanning {
-                "◌ DISCOVERING ".into()
+                "◌ discovering ".into()
             } else {
-                "○ NO PROJECTS ".into()
+                "○ no projects ".into()
             }
         });
     let chunks = Layout::horizontal([
@@ -180,79 +180,65 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         Constraint::Length(right.chars().count() as u16 + 1),
     ])
     .split(area);
-    frame.render_widget(
-        Paragraph::new(title).block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(theme.border)),
-        ),
-        chunks[0],
-    );
+    frame.render_widget(Paragraph::new(title), chunks[0]);
     let color = current
         .map(|p| theme.score(p.score.total))
         .unwrap_or(theme.muted);
     frame.render_widget(
         Paragraph::new(right)
             .alignment(Alignment::Right)
-            .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
-            .block(
-                Block::default()
-                    .borders(Borders::BOTTOM)
-                    .border_style(Style::default().fg(theme.border)),
-            ),
+            .style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
         chunks[1],
     );
 }
 
 fn draw_tabs(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     let mut spans = vec![Span::raw(" ")];
-    for (index, tab) in Tab::ALL.into_iter().enumerate() {
-        let label = format!(" {}:{} ", index + 1, tab.label());
+    for (tab, label) in Tab::ALL.into_iter().zip(tab_labels()) {
         let style = if tab == app.tab {
             theme.selected().add_modifier(Modifier::UNDERLINED)
         } else {
             Style::default().fg(theme.muted)
         };
         spans.push(Span::styled(label, style));
-        spans.push(Span::raw(" "));
+        spans.push(Span::raw(""));
     }
-    frame.render_widget(
-        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
-        area,
-    );
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_projects(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
+    let name_width = usize::from(area.width.saturating_sub(15)).max(4);
     let items = app
         .visible_projects()
         .map(|project| {
+            let (mark, color) = score_mark(project.score.total, theme);
+            let dirty = if project.git.dirty > 0 { " *" } else { "" };
             let age = project
                 .git
                 .last_commit_age_days
                 .map(human_age)
-                .unwrap_or_else(|| "no commits".into());
-            let (mark, color) = score_mark(project.score.total, theme);
-            let dirty = if project.git.dirty > 0 { " *" } else { "" };
-            let activity = activity_strip(&project.git.activity, 7);
-            ListItem::new(vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {mark} {:>3} ", project.score.total),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("{}{}", project.name, dirty),
-                        Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        format!("     {:<7} {age:<9}", project.profile.kind.label()),
-                        Style::default().fg(theme.faint),
-                    ),
-                    Span::styled(activity, Style::default().fg(theme.secondary)),
-                ]),
-            ])
+                .unwrap_or_else(|| "—".into());
+            let mut name = format!("{}{}", project.name, dirty);
+            if name.chars().count() > name_width {
+                name = name.chars().take(name_width.saturating_sub(1)).collect();
+                name.push('…');
+            }
+            let padding = name_width.saturating_sub(name.chars().count());
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{mark}{:>3} ", project.score.total),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{name}{}", " ".repeat(padding)),
+                    Style::default().fg(theme.text),
+                ),
+                Span::styled(
+                    activity_strip(&project.git.activity, 3),
+                    Style::default().fg(theme.secondary),
+                ),
+                Span::styled(format!(" {age:>4}"), Style::default().fg(theme.faint)),
+            ]))
         })
         .collect::<Vec<_>>();
     let list = List::new(items)
@@ -272,7 +258,7 @@ fn draw_projects(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         ))
         .highlight_style(Style::default().add_modifier(Modifier::BOLD))
         .highlight_symbol("›");
-    let visible_rows = usize::from(area.height.saturating_sub(2) / 2).max(1);
+    let visible_rows = usize::from(area.height.saturating_sub(1)).max(1);
     let offset = project_list_offset(app.selected, app.visible_count(), visible_rows);
     let mut state = ListState::default()
         .with_selected(Some(app.selected))
@@ -327,7 +313,6 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
                     .fg(theme.secondary)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::raw(""),
             Line::from(vec![
                 Span::styled(" MODEL  ", Style::default().fg(theme.faint)),
                 Span::styled(app.ai_model.clone(), Style::default().fg(theme.text)),
@@ -344,7 +329,7 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
                 true,
             )),
             Rect {
-                height: area.height.min(10),
+                height: area.height.min(4),
                 ..area
             },
         );
@@ -352,7 +337,7 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
     }
 
     if let Some(report) = app.current_ai_report() {
-        if area.height < 24 {
+        if area.height < 18 {
             let mut lines = vec![
                 Line::from(Span::styled(
                     report.summary.clone(),
@@ -397,11 +382,10 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
             return;
         }
         let rows = Layout::vertical([
-            Constraint::Length(7),
-            Constraint::Min(9),
-            Constraint::Length(7),
+            Constraint::Length(4),
+            Constraint::Min(5),
+            Constraint::Length(3),
         ])
-        .spacing(1)
         .split(area);
         let token_note = report
             .total_tokens
@@ -418,7 +402,6 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
                     report.summary.clone(),
                     Style::default().fg(theme.text),
                 )),
-                Line::raw(""),
                 Line::from(Span::styled(
                     format!(" {}{token_note}{state_note}", report.model),
                     Style::default().fg(if stale { theme.warn } else { theme.faint }),
@@ -452,7 +435,6 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
                         Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                     ),
                 ]),
-                Line::raw(""),
                 Line::from(Span::styled(
                     " a refresh analysis   p inspect exact payload",
                     Style::default().fg(theme.faint),
@@ -482,11 +464,9 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
                 })
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::raw(""),
         field("Provider", "OpenRouter", theme),
         field("Model", &app.ai_model, theme),
         field("Credential", &credential, theme),
-        Line::raw(""),
         Line::from(vec![
             Span::styled(" p ", theme.selected()),
             Span::styled(
@@ -501,7 +481,6 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
                 Style::default().fg(theme.muted),
             ),
         ]),
-        Line::raw(""),
         Line::from(Span::styled(
             "No paths, URLs, descriptions, commit messages, source code, or Cairn item titles are included.",
             Style::default().fg(theme.faint),
@@ -514,7 +493,7 @@ fn draw_ai(frame: &mut Frame<'_>, app: &App, project: &Project, theme: Theme, ar
             true,
         )),
         Rect {
-            height: area.height.min(16),
+            height: area.height.min(9),
             ..area
         },
     );
@@ -556,25 +535,13 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         .map(|cairn| cairn.active)
         .sum::<usize>();
 
-    let compact = area.height < 23;
-    let rows = if compact {
-        Layout::vertical([
-            Constraint::Length(4),
-            Constraint::Length(5),
-            Constraint::Min(8),
-        ])
-        .spacing(1)
-        .split(area)
-    } else {
-        Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Length(5),
-            Constraint::Length(8),
-            Constraint::Min(0),
-        ])
-        .spacing(1)
-        .split(area)
-    };
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Length(7),
+        Constraint::Min(0),
+    ])
+    .split(area);
     frame.render_widget(
         LineGauge::default()
             .block(panel(" PORTFOLIO EFFECTIVENESS ", theme, true))
@@ -610,7 +577,6 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
             Constraint::Ratio(1, 5),
             Constraint::Ratio(1, 5),
         ])
-        .spacing(1)
         .split(rows[1])
     } else {
         Layout::horizontal([
@@ -619,7 +585,6 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
             Constraint::Ratio(1, 4),
             Constraint::Ratio(1, 4),
         ])
-        .spacing(1)
         .split(rows[1])
     };
     metric(
@@ -690,7 +655,6 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
             Constraint::Ratio(1, 5),
             Constraint::Ratio(1, 5),
         ])
-        .spacing(1)
         .split(rows[2])
     } else if rows[2].width >= 100 {
         Layout::horizontal([
@@ -699,7 +663,6 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
             Constraint::Ratio(1, 4),
             Constraint::Ratio(1, 4),
         ])
-        .spacing(1)
         .split(rows[2])
     } else {
         Layout::horizontal([
@@ -707,7 +670,6 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
             Constraint::Ratio(1, 3),
             Constraint::Ratio(1, 3),
         ])
-        .spacing(1)
         .split(rows[2])
     };
     let lifecycle = [
@@ -917,27 +879,13 @@ fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
 }
 
 fn draw_overview(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: Rect) {
-    let compact = area.height < 25;
-    let rows = if compact {
-        Layout::vertical([
-            Constraint::Length(4),
-            Constraint::Length(3),
-            Constraint::Length(5),
-            Constraint::Min(3),
-        ])
-        .spacing(1)
-        .split(area)
-    } else {
-        Layout::vertical([
-            Constraint::Length(4),
-            Constraint::Length(3),
-            Constraint::Length(6),
-            Constraint::Length(9),
-            Constraint::Min(0),
-        ])
-        .spacing(1)
-        .split(area)
-    };
+    let rows = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Min(3),
+    ])
+    .split(area);
 
     let description = project
         .description
@@ -1093,10 +1041,9 @@ fn draw_overview(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: R
             ])
         })
         .collect::<Vec<_>>();
-    if rows[3].height >= 8 && rows[3].width >= 72 {
-        let bottom = Layout::horizontal([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
-            .spacing(1)
-            .split(rows[3]);
+    if rows[3].height >= 7 && rows[3].width >= 72 {
+        let bottom =
+            Layout::horizontal([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)]).split(rows[3]);
         frame.render_widget(
             Paragraph::new(signals).block(panel(" SIGNALS ", theme, true)),
             bottom[0],
@@ -1141,25 +1088,13 @@ fn draw_score_shape(frame: &mut Frame<'_>, project: &Project, theme: Theme, area
 }
 
 fn draw_git(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: Rect) {
-    let compact = area.height < 26;
-    let rows = if compact {
-        Layout::vertical([
-            Constraint::Length(5),
-            Constraint::Length(5),
-            Constraint::Min(7),
-        ])
-        .spacing(1)
-        .split(area)
-    } else {
-        Layout::vertical([
-            Constraint::Length(9),
-            Constraint::Length(7),
-            Constraint::Length(5),
-            Constraint::Min(3),
-        ])
-        .spacing(1)
-        .split(area)
-    };
+    let rows = Layout::vertical([
+        Constraint::Length(6),
+        Constraint::Length(3),
+        Constraint::Length(4),
+        Constraint::Min(0),
+    ])
+    .split(area);
     frame.render_widget(
         Sparkline::default()
             .block(panel(" 12-WEEK COMMIT ACTIVITY ", theme, true))
@@ -1248,59 +1183,36 @@ fn draw_git(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: Rect) 
         project.git.last_commit_date.as_deref().unwrap_or("—"),
         project.git.last_subject.as_deref().unwrap_or("No commits")
     );
-    if compact {
-        frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(sync),
-                Line::from(Span::styled(
-                    format!(" {languages}"),
-                    Style::default().fg(theme.faint),
-                )),
-                Line::raw(""),
-                Line::from(vec![
-                    Span::styled(" LAST  ", Style::default().fg(theme.faint)),
-                    Span::styled(last, Style::default().fg(theme.text)),
-                ]),
-            ])
-            .wrap(Wrap { trim: true })
-            .style(Style::default().fg(theme.muted))
-            .block(panel(" REPOSITORY ", theme, true)),
-            rows[2],
-        );
-    } else {
-        frame.render_widget(
-            Paragraph::new(vec![
-                Line::from(sync),
-                Line::from(Span::styled(
-                    format!(" {languages}"),
-                    Style::default().fg(theme.faint),
-                )),
-            ])
-            .style(Style::default().fg(theme.muted))
-            .block(panel(" REPOSITORY ", theme, true)),
-            rows[2],
-        );
-        frame.render_widget(
-            Paragraph::new(last).wrap(Wrap { trim: true }).block(panel(
-                " LATEST COMMIT ",
-                theme,
-                true,
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(sync),
+            Line::from(Span::styled(
+                format!(" {languages}"),
+                Style::default().fg(theme.faint),
             )),
-            rows[3],
-        );
-    }
+            Line::from(vec![
+                Span::styled(" LAST  ", Style::default().fg(theme.faint)),
+                Span::styled(last, Style::default().fg(theme.text)),
+            ]),
+        ])
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(theme.muted))
+        .block(panel(" REPOSITORY ", theme, true)),
+        rows[2],
+    );
 }
 
 fn draw_delivery(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: Rect) {
-    let halves = Layout::vertical([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .spacing(1)
-        .split(area);
-    let top = Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .spacing(1)
-        .split(halves[0]);
-    let bottom = Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .spacing(1)
-        .split(halves[1]);
+    let halves = Layout::vertical([
+        Constraint::Length(7),
+        Constraint::Length(6),
+        Constraint::Min(0),
+    ])
+    .split(area);
+    let top =
+        Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).split(halves[0]);
+    let bottom =
+        Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).split(halves[1]);
 
     checklist(
         frame,
@@ -1451,25 +1363,13 @@ fn draw_cairn(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: Rect
         );
         return;
     };
-    let compact = area.height < 23;
-    let rows = if compact {
-        Layout::vertical([
-            Constraint::Length(4),
-            Constraint::Length(5),
-            Constraint::Min(6),
-        ])
-        .spacing(1)
-        .split(area)
-    } else {
-        Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Length(5),
-            Constraint::Length(8),
-            Constraint::Min(0),
-        ])
-        .spacing(1)
-        .split(area)
-    };
+    let rows = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Length(3),
+        Constraint::Length(7),
+        Constraint::Min(0),
+    ])
+    .split(area);
     frame.render_widget(
         LineGauge::default()
             .block(panel(" ROADMAP COMPLETION ", theme, true))
@@ -1538,9 +1438,8 @@ fn draw_cairn(frame: &mut Frame<'_>, project: &Project, theme: Theme, area: Rect
         theme,
     );
 
-    let columns = Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)])
-        .spacing(1)
-        .split(rows[2]);
+    let columns =
+        Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).split(rows[2]);
     item_list(
         frame,
         columns[0],
@@ -1666,7 +1565,7 @@ fn yes_no_unknown(value: Option<bool>) -> &'static str {
 
 fn panel<'a>(title: impl Into<Line<'a>>, theme: Theme, focused: bool) -> Block<'a> {
     Block::default()
-        .borders(Borders::ALL)
+        .borders(Borders::TOP)
         .border_style(Style::default().fg(if focused { theme.border } else { theme.faint }))
         .title(title)
         .title_style(
@@ -1678,12 +1577,11 @@ fn panel<'a>(title: impl Into<Line<'a>>, theme: Theme, focused: bool) -> Block<'
 
 fn human_age(days: u64) -> String {
     match days {
-        0 => "today".into(),
-        1 => "yesterday".into(),
-        2..=13 => format!("{days}d ago"),
-        14..=59 => format!("{}w ago", days / 7),
-        60..=729 => format!("{}mo ago", days / 30),
-        _ => format!("{}y ago", days / 365),
+        0 => "now".into(),
+        1..=13 => format!("{days}d"),
+        14..=59 => format!("{}w", days / 7),
+        60..=729 => format!("{}mo", days / 30),
+        _ => format!("{}y", days / 365),
     }
 }
 
@@ -1842,6 +1740,7 @@ fn draw_ai_payload(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         .wrap(Wrap { trim: true })
         .block(
             panel(" OUTBOUND AI PAYLOAD · METRICS ONLY ", theme, true)
+                .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title_bottom(
                     Line::from(" p/esc close · a analyze · --ai-payload prints full JSON ")
@@ -1899,6 +1798,7 @@ fn draw_help(frame: &mut Frame<'_>, theme: Theme, area: Rect) {
     frame.render_widget(
         Paragraph::new(lines).block(
             panel(" KEYBOARD ", theme, true)
+                .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title_bottom(Line::from(" mouse supported · keyboard complete ").right_aligned()),
         ),
@@ -1920,7 +1820,7 @@ fn draw_too_small(frame: &mut Frame<'_>, theme: Theme, area: Rect) {
             Style::default().fg(theme.text),
         )),
         Line::from(Span::styled(
-            format!("{}×{} now · needs at least 72×20", area.width, area.height),
+            format!("{}×{} now · needs at least 72×16", area.width, area.height),
             Style::default().fg(theme.faint),
         )),
     ];
@@ -1971,9 +1871,9 @@ mod tests {
 
     #[test]
     fn ages_are_compact() {
-        assert_eq!(human_age(0), "today");
-        assert_eq!(human_age(21), "3w ago");
-        assert_eq!(human_age(400), "13mo ago");
+        assert_eq!(human_age(0), "now");
+        assert_eq!(human_age(21), "3w");
+        assert_eq!(human_age(400), "13mo");
     }
 
     #[test]

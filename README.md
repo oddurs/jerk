@@ -61,6 +61,8 @@ Inside the TUI, use `j`/`k` or the arrow keys to select projects, `g`/`G` to jum
 
 Mouse input works alongside the keyboard: click a tab, project, or footer command; use the wheel to move through projects; and click a modal to dismiss it. Mouse capture is released whenever `jerk` exits, including error paths.
 
+The interface is intentionally dense: one-line navigation and project rows, compact evidence cards, and lightweight section rules keep a large portfolio scannable without turning the terminal into a wall of boxes.
+
 ## Terminal-native colour
 
 The default theme never paints a background and never embeds RGB colours. It uses `Color::Reset` plus the terminal's ANSI roles, so Ghostty, SSH sessions, light themes, and live palette changes remain authoritative. Selection and progress indicators use foreground-only emphasis, avoiding reverse-video blocks that fight dark or tinted backgrounds. Set `NO_COLOR=1` for a monochrome interface.
