@@ -204,15 +204,12 @@ fn draw_detail(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
 fn draw_portfolio(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     let projects = app.visible_projects().collect::<Vec<_>>();
     let total = projects.len();
-    let average = if total == 0 {
-        0
-    } else {
-        projects
-            .iter()
-            .map(|project| usize::from(project.score.total))
-            .sum::<usize>()
-            / total
-    };
+    let average = projects
+        .iter()
+        .map(|project| usize::from(project.score.total))
+        .sum::<usize>()
+        .checked_div(total)
+        .unwrap_or_default();
     let active = projects
         .iter()
         .filter(|project| {
@@ -1409,11 +1406,10 @@ fn activity_strip(values: &[u64], width: usize) -> String {
     let maximum = shown.iter().copied().max().unwrap_or_default();
     let mut out = " ".repeat(width.saturating_sub(shown.len()));
     for value in shown {
-        let level = if maximum == 0 {
-            0
-        } else {
-            (*value * 7 / maximum) as usize
-        };
+        let level = value
+            .saturating_mul(7)
+            .checked_div(maximum)
+            .unwrap_or_default() as usize;
         out.push(LEVELS[level]);
     }
     out

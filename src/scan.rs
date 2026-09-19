@@ -482,10 +482,8 @@ pub fn github_slug(remote: &str) -> Option<String> {
         rest
     } else if let Some(rest) = remote.strip_prefix("https://github.com/") {
         rest
-    } else if let Some(rest) = remote.strip_prefix("http://github.com/") {
-        rest
     } else {
-        return None;
+        remote.strip_prefix("http://github.com/")?
     };
     (path.split('/').count() == 2).then(|| path.to_string())
 }
@@ -541,11 +539,7 @@ fn cairn_stats(path: &Path) -> Option<CairnStats> {
     }
     stats.milestones = milestones.len();
     let decided = stats.total.saturating_sub(stats.dropped);
-    stats.completion = if decided == 0 {
-        0
-    } else {
-        ((stats.done * 100) / decided) as u16
-    };
+    stats.completion = (stats.done * 100).checked_div(decided).unwrap_or_default() as u16;
     Some(stats)
 }
 

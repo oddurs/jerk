@@ -382,7 +382,7 @@ fn matches_filter(project: &Project, filter: &str) -> bool {
 fn sort_projects(sort: ProjectSort, projects: &mut [Project]) {
     match sort {
         ProjectSort::Name => {
-            projects.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            projects.sort_by_key(|project| project.name.to_lowercase());
         }
         ProjectSort::NeedsAttention => projects.sort_by(|a, b| {
             a.score
