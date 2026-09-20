@@ -159,17 +159,12 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
         ),
     ]);
     let right = current
-        .map(|project| {
-            format!(
-                "{}  {:>3}  {} ",
-                project.grade(),
-                project.score.total,
-                if app.is_loading() {
-                    "◌ sync"
-                } else {
-                    "● live"
-                }
-            )
+        .map(|_| {
+            if app.is_loading() {
+                "◌ sync ".to_string()
+            } else {
+                "● live ".to_string()
+            }
         })
         .unwrap_or_else(|| {
             if app.scanning {
@@ -184,9 +179,7 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, theme: Theme, area: Rect) {
     ])
     .split(area);
     frame.render_widget(Paragraph::new(title), chunks[0]);
-    let color = current
-        .map(|p| theme.score(p.score.total))
-        .unwrap_or(theme.muted);
+    let color = current.map(|_| theme.good).unwrap_or(theme.muted);
     frame.render_widget(
         Paragraph::new(right)
             .alignment(Alignment::Right)
@@ -1473,16 +1466,21 @@ fn metric(
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(
+                title.to_string(),
+                Style::default()
+                    .fg(theme.faint)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
                 value.to_string(),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 note.to_string(),
-                Style::default().fg(theme.faint),
+                Style::default().fg(theme.muted),
             )),
         ])
-        .alignment(Alignment::Center)
-        .block(panel(format!(" {title} "), theme, false)),
+        .alignment(Alignment::Center),
         area,
     );
 }
